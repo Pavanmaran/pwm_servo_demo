@@ -4,92 +4,47 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 
-static const char *TAG = "PWM_BUZZER";
+static const char *TAG = "PWM_SERVO";
 
 // --- Settings you can change ---
-#define BUZZER_GPIO     GPIO_NUM_4          // pin the buzzer is connected to
-#define PWM_RESOLUTION  LEDC_TIMER_10_BIT   // duty is a number from 0 to 1023
-#define BUZZER_VOLUME   50                  // duty in percent (50 = loudest for a passive buzzer)
-#define TEMPO_MS        400                 // length of one quarter note in ms
+#define SERVO_GPIO       GPIO_NUM_4          // pin the servo signal wire is connected to
+#define PWM_FREQ_HZ      50                  // servos expect 50 Hz (20 ms period)
+#define PWM_RESOLUTION   LEDC_TIMER_14_BIT   // duty is a number from 0 to 16383
+#define SERVO_MIN_US     500                 // pulse width for 0 degrees (some servos: 1000)
+#define SERVO_MAX_US     2500                // pulse width for 180 degrees (some servos: 2000)
+#define SERVO_MAX_ANGLE  180
 
-// Note frequencies in Hz (0 = silence / rest)
-#define REST 0
-#define C4 262
-#define D4 294
-#define E4 330
-#define F4 349
-#define G4 392
-#define A4 440
-#define B4 494
-#define C5 523
-#define D5 587
-#define E5 659
-#define F5 698
-#define G5 784
+#define PERIOD_US        (1000000 / PWM_FREQ_HZ)
 
-// Note lengths (in ms), based on TEMPO_MS
-#define Q   (TEMPO_MS)             // quarter
-#define H   (TEMPO_MS * 2)         // half
-#define DE  (TEMPO_MS * 3 / 4)     // dotted eighth
-#define S   (TEMPO_MS / 4)         // sixteenth
-#define DH  (TEMPO_MS * 3)         // dotted half
-
-typedef struct {
-    uint32_t freq_hz;
-    uint32_t duration_ms;
-} note_t;
-
-static const note_t happy_birthday[] = {
-    // Happy birthday to you
-    {G4, DE}, {G4, S}, {A4, Q}, {G4, Q}, {C5, Q}, {B4, H},
-    // Happy birthday to you
-    {G4, DE}, {G4, S}, {A4, Q}, {G4, Q}, {D5, Q}, {C5, H},
-    // Happy birthday dear (name)
-    {G4, DE}, {G4, S}, {G5, Q}, {E5, Q}, {C5, Q}, {B4, Q}, {A4, Q},
-    // Happy birthday to you
-    {F5, DE}, {F5, S}, {E5, Q}, {C5, Q}, {D5, Q}, {C5, DH},
-};
-
-#define NOTE_COUNT (sizeof(happy_birthday) / sizeof(happy_birthday[0]))
-
-// Play one note: change the PWM frequency, keep the duty at 50%
-static void play_note(uint32_t freq_hz, uint32_t duration_ms)
+// Move the servo to an angle (0 - 180 degrees)
+static void servo_set_angle(int angle)
 {
-    const int max_duty = (1 << PWM_RESOLUTION) - 1;
+    if (angle < 0) angle = 0;
+    if (angle > SERVO_MAX_ANGLE) angle = SERVO_MAX_ANGLE;
 
-    if (freq_hz == REST) {
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-        vTaskDelay(pdMS_TO_TICKS(duration_ms));
-        return;
-    }
+    // angle -> pulse width in microseconds -> duty value
+    uint32_t pulse_us = SERVO_MIN_US + (SERVO_MAX_US - SERVO_MIN_US) * angle / SERVO_MAX_ANGLE;
+    uint32_t duty = (uint32_t)(((1 << PWM_RESOLUTION) - 1) * pulse_us / PERIOD_US);
 
-    ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq_hz);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, max_duty * BUZZER_VOLUME / 100);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-
-    // Sound for 90% of the note, then a short silence so repeated notes are distinct
-    vTaskDelay(pdMS_TO_TICKS(duration_ms * 9 / 10));
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    vTaskDelay(pdMS_TO_TICKS(duration_ms / 10));
 }
 
 void app_main(void)
 {
-    // Step 1: set up the PWM timer (frequency is changed per note later)
+    // Step 1: set up the PWM timer (50 Hz for the servo)
     ledc_timer_config_t timer_config = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
         .timer_num       = LEDC_TIMER_0,
         .duty_resolution = PWM_RESOLUTION,
-        .freq_hz         = C4,
+        .freq_hz         = PWM_FREQ_HZ,
         .clk_cfg         = LEDC_AUTO_CLK
     };
     ledc_timer_config(&timer_config);
 
-    // Step 2: set up the PWM channel (starts silent)
+    // Step 2: set up the PWM channel (which pin the servo is on)
     ledc_channel_config_t channel_config = {
-        .gpio_num   = BUZZER_GPIO,
+        .gpio_num   = SERVO_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel    = LEDC_CHANNEL_0,
         .timer_sel  = LEDC_TIMER_0,
@@ -98,14 +53,27 @@ void app_main(void)
     };
     ledc_channel_config(&channel_config);
 
-    ESP_LOGI(TAG, "Buzzer ready on GPIO %d", BUZZER_GPIO);
+    ESP_LOGI(TAG, "Servo PWM started on GPIO %d at %d Hz", SERVO_GPIO, PWM_FREQ_HZ);
 
-    // Step 3: play the song, pause, repeat
+    // Step 3: demo loop
     while (1) {
-        ESP_LOGI(TAG, "Playing Happy Birthday");
-        for (size_t i = 0; i < NOTE_COUNT; i++) {
-            play_note(happy_birthday[i].freq_hz, happy_birthday[i].duration_ms);
+        // Jump to 3 positions
+        const int positions[] = {0, 90, 180, 90};
+        for (int i = 0; i < 4; i++) {
+            ESP_LOGI(TAG, "Angle: %d", positions[i]);
+            servo_set_angle(positions[i]);
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
-        vTaskDelay(pdMS_TO_TICKS(3000)); // wait 3 seconds before replaying
+
+        // Smooth sweep 0 -> 180 -> 0
+        ESP_LOGI(TAG, "Sweeping");
+        for (int angle = 0; angle <= 180; angle += 2) {
+            servo_set_angle(angle);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        for (int angle = 180; angle >= 0; angle -= 2) {
+            servo_set_angle(angle);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
     }
 }
