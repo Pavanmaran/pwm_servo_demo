@@ -12,7 +12,7 @@ static const char *TAG = "PWM_SERVO";
 #define PWM_RESOLUTION   LEDC_TIMER_14_BIT   // duty is a number from 0 to 16383
 #define SERVO_MIN_US     500                 // pulse width for 0 degrees (some servos: 1000)
 #define SERVO_MAX_US     2500                // pulse width for 180 degrees (some servos: 2000)
-#define SERVO_MAX_ANGLE  180
+#define SERVO_MAX_ANGLE  90
 
 #define PERIOD_US        (1000000 / PWM_FREQ_HZ)
 
